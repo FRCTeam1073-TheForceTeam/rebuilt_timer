@@ -35,7 +35,7 @@
 <body>
   <!-- PWA Install Button -->
   <div id="pwa-install-container" style="position: fixed; top: 10px; right: 10px; z-index: 1000; display: block;">
-    <button id="pwa-install-btn" style="padding: 10px 20px; background-color: #0175C2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
+    <button id="pwa-install-btn" style="padding: 10px 20px; background-color: #BDBDBD; color: black; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
       Install App
     </button>
   </div>
@@ -70,6 +70,11 @@
       // Hide install button when app is installed
       document.getElementById('pwa-install-container').style.display = 'none';
     });
+
+    // Function to control install button visibility from Flutter
+    window.toggleInstallButton = function(show) {
+      document.getElementById('pwa-install-container').style.display = show ? 'block' : 'none';
+    };
   </script>
 
   <!--

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:js' as js;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -505,11 +506,22 @@ class _HomePageState extends State<HomePage> {
     // Stop listening
     _stopMicrophoneListener();
 
-    // Navigate to timer page
+    // Hide install button when navigating to timer
+    if (kIsWeb) {
+      js.context.callMethod('toggleInstallButton', [false]);
+    }
+
+    // Navigate to timer page and clear color when returning
     if (mounted) {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
-      );
+      ).then((_) {
+        if (mounted) {
+          setState(() {
+            _myColor = null;
+          });
+        }
+      });
     }
   }
 
@@ -519,9 +531,20 @@ class _HomePageState extends State<HomePage> {
       _stopMicrophoneListener();
     }
 
+    // Hide install button when navigating to timer
+    if (kIsWeb) {
+      js.context.callMethod('toggleInstallButton', [false]);
+    }
+
     Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
-    );
+    ).then((_) {
+      if (mounted) {
+        setState(() {
+          _myColor = null;
+        });
+      }
+    });
   }
 
   @override
@@ -670,6 +693,11 @@ class _TimerPageState extends State<TimerPage> {
   }
 
   void _goHome() {
+    // Show install button when navigating back to home
+    if (kIsWeb) {
+      js.context.callMethod('toggleInstallButton', [true]);
+    }
+
     if (mounted) {
       Navigator.of(context).pop();
     }
@@ -678,7 +706,7 @@ class _TimerPageState extends State<TimerPage> {
   String _formatTime(int seconds) {
     int minutes = seconds ~/ 60;
     int secs = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    return '$minutes:${secs.toString().padLeft(2, '0')}';
   }
 
   int _getSecondsUntilNextTransition() {
@@ -815,8 +843,6 @@ class _TimerPageState extends State<TimerPage> {
           _formatTime(_counter),
           style: Theme.of(context).textTheme.headlineMedium,
         ),
-        const SizedBox(height: 20),
-        ElevatedButton(onPressed: _goHome, child: const Text('Stop')),
       ],
     );
 
