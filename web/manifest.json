@@ -1,6 +1,6 @@
 {
-    "name": "rebuilt_timer",
-    "short_name": "rebuilt_timer",
+    "name": "Rebuilt Timer",
+    "short_name": "Rebuilt Timer",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

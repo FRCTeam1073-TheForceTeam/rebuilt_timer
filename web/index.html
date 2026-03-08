@@ -23,16 +23,55 @@
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="rebuilt_timer">
+  <meta name="apple-mobile-web-app-title" content="Rebuilt Timer">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>rebuilt_timer</title>
+  <title>Rebuilt Timer</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <!-- PWA Install Button -->
+  <div id="pwa-install-container" style="position: fixed; top: 10px; right: 10px; z-index: 1000; display: block;">
+    <button id="pwa-install-btn" style="padding: 10px 20px; background-color: #0175C2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
+      Install App
+    </button>
+  </div>
+
+  <script>
+    let deferredPrompt;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      // Prevent the mini-infobar from appearing
+      e.preventDefault();
+      // Stash the event for later use.
+      deferredPrompt = e;
+      // Update UI to show install button (already visible by default)
+    });
+
+    document.getElementById('pwa-install-btn').addEventListener('click', async () => {
+      if (deferredPrompt) {
+        // Show the install prompt
+        deferredPrompt.prompt();
+        // Wait for the user to respond to the prompt
+        const { outcome } = await deferredPrompt.userChoice;
+        // Hide the install button
+        document.getElementById('pwa-install-container').style.display = 'none';
+        // We've used the prompt, and can't use it again
+        deferredPrompt = null;
+      } else {
+        alert('This app is already installed or PWA installation is not supported in your browser.');
+      }
+    });
+
+    window.addEventListener('appinstalled', () => {
+      // Hide install button when app is installed
+      document.getElementById('pwa-install-container').style.display = 'none';
+    });
+  </script>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
