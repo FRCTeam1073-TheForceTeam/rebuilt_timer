@@ -27,7 +27,15 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Rebuilt Timer',
-      theme: ThemeData(colorScheme: .fromSeed(seedColor: Colors.deepPurple)),
+      theme: ThemeData(
+        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade400,
+            foregroundColor: Colors.black,
+          ),
+        ),
+      ),
       home: const HomePage(title: 'Rebuilt Timer'),
     );
   }
@@ -44,6 +52,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   AudioRecorder? _recorder;
   bool _isListeningToMic = false;
+  String? _myColor; // Track team color: 'red' or 'blue'
   final int _bellDetectionWindow = 1000; // 1 second window
 
   // State machine for bell pattern detection
@@ -498,9 +507,9 @@ class _HomePageState extends State<HomePage> {
 
     // Navigate to timer page
     if (mounted) {
-      Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (context) => const TimerPage()));
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
+      );
     }
   }
 
@@ -510,16 +519,18 @@ class _HomePageState extends State<HomePage> {
       _stopMicrophoneListener();
     }
 
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (context) => const TimerPage()));
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        backgroundColor: Colors.grey.shade900,
+        foregroundColor: Colors.white,
         title: Text(widget.title),
       ),
       body: Center(
@@ -537,6 +548,47 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(height: 20),
                 ],
               ),
+            const Text('What color am I?'),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _myColor = 'red';
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _myColor == 'red' ? Colors.red : null,
+                  ),
+                  child: Text(
+                    'Red',
+                    style: TextStyle(
+                      color: _myColor == 'red' ? Colors.white : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _myColor = 'blue';
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _myColor == 'blue' ? Colors.blue : null,
+                  ),
+                  child: Text(
+                    'Blue',
+                    style: TextStyle(
+                      color: _myColor == 'blue' ? Colors.white : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
             if (_recorder != null)
               ElevatedButton(
                 onPressed: () {
@@ -564,7 +616,8 @@ class _HomePageState extends State<HomePage> {
 }
 
 class TimerPage extends StatefulWidget {
-  const TimerPage({super.key});
+  const TimerPage({super.key, this.myColor});
+  final String? myColor;
 
   @override
   State<TimerPage> createState() => _TimerPageState();
@@ -574,9 +627,18 @@ class _TimerPageState extends State<TimerPage> {
   int _counter = 139;
   late Timer _timer;
   bool _isRunning = true;
+  String? _autoWinner; // Track which team won auto: 'red' or 'blue'
 
   // Transition times in seconds: 2:10, 1:45, 1:20, 0:55, 0:30, 0:00
   final List<int> _transitionTimes = [130, 105, 80, 55, 30, 0];
+  final List<String> _transitionActives = [
+    'both',
+    'loser',
+    'winner',
+    'loser',
+    'winner',
+    'both',
+  ];
 
   @override
   void initState() {
@@ -630,6 +692,75 @@ class _TimerPageState extends State<TimerPage> {
     return 0;
   }
 
+  Color _getTransitionBackgroundColor() {
+    // Find which transition we're currently in
+    int transitionIndex = -1;
+    for (int i = 0; i < _transitionTimes.length; i++) {
+      if (_counter > _transitionTimes[i]) {
+        transitionIndex = i;
+        break;
+      }
+    }
+
+    if (transitionIndex == -1 || transitionIndex >= _transitionActives.length) {
+      return Colors.grey.shade800;
+    }
+
+    final activeState = _transitionActives[transitionIndex];
+
+    if (activeState == 'both') {
+      return Colors.purple.shade700;
+    }
+
+    // If neither team won auto yet, show dark gray
+    if (_autoWinner == null) {
+      return Colors.grey.shade800;
+    }
+
+    // Determine if we're showing the winner or loser
+    if (activeState == 'winner') {
+      return _autoWinner == 'red' ? Colors.red.shade700 : Colors.blue.shade700;
+    } else if (activeState == 'loser') {
+      return _autoWinner == 'red' ? Colors.blue.shade700 : Colors.red.shade700;
+    }
+
+    return Colors.grey.shade800;
+  }
+
+  bool _shouldHighlightPageBackground() {
+    // Find which transition we're currently in
+    int transitionIndex = -1;
+    for (int i = 0; i < _transitionTimes.length; i++) {
+      if (_counter > _transitionTimes[i]) {
+        transitionIndex = i;
+        break;
+      }
+    }
+
+    if (transitionIndex == -1 || transitionIndex >= _transitionActives.length) {
+      return false;
+    }
+
+    final activeState = _transitionActives[transitionIndex];
+
+    // Highlight if transition is 'both'
+    if (activeState == 'both') {
+      return true;
+    }
+
+    // Highlight if my color matches the transition color being displayed
+    if (widget.myColor == null || _autoWinner == null) {
+      return false;
+    }
+
+    // Determine what color the transition is showing and compare to my color
+    final transitionColor = activeState == 'winner'
+        ? (_autoWinner == 'red' ? 'red' : 'blue')
+        : (_autoWinner == 'red' ? 'blue' : 'red');
+
+    return widget.myColor == transitionColor;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isLandscape =
@@ -638,6 +769,47 @@ class _TimerPageState extends State<TimerPage> {
     final leftColumn = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
+        const Text('Who won auto?'),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _autoWinner = 'red';
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _autoWinner == 'red' ? Colors.red : null,
+              ),
+              child: Text(
+                'Red',
+                style: TextStyle(
+                  color: _autoWinner == 'red' ? Colors.white : null,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _autoWinner = 'blue';
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _autoWinner == 'blue' ? Colors.blue : null,
+              ),
+              child: Text(
+                'Blue',
+                style: TextStyle(
+                  color: _autoWinner == 'blue' ? Colors.white : null,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 30),
         const Text('Match time'),
         Text(
           _formatTime(_counter),
@@ -648,37 +820,63 @@ class _TimerPageState extends State<TimerPage> {
       ],
     );
 
-    final rightColumn = Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Text('Transition'),
-        const SizedBox(height: 20),
-        Text(
-          '${_getSecondsUntilNextTransition()}',
-          style: TextStyle(
-            fontSize: MediaQuery.of(context).size.shortestSide * 0.5,
-            fontWeight: FontWeight.bold,
-            height: 0.8,
+    final rightColumn = Container(
+      color: _getTransitionBackgroundColor(),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.height * 0.1),
+      width: MediaQuery.of(context).size.shortestSide * 0.8,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Transition', style: TextStyle(color: Colors.white)),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '${_getSecondsUntilNextTransition()}',
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: MediaQuery.of(context).size.shortestSide * 0.5,
+                  fontWeight: FontWeight.bold,
+                  height: 0.8,
+                  color: Colors.white,
+                ),
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
 
     return Scaffold(
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        backgroundColor: Colors.grey.shade900,
+        foregroundColor: Colors.white,
         title: const Text('Match Timer'),
       ),
-      body: Center(
-        child: isLandscape
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [leftColumn, rightColumn],
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [leftColumn, const SizedBox(height: 30), rightColumn],
-              ),
+      body: Container(
+        color: _shouldHighlightPageBackground()
+            ? Colors.yellow
+            : Colors.transparent,
+        child: Center(
+          child: isLandscape
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [leftColumn, rightColumn],
+                )
+              : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    leftColumn,
+                    const SizedBox(height: 30),
+                    rightColumn,
+                  ],
+                ),
+        ),
       ),
     );
   }
