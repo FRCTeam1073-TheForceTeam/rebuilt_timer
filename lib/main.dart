@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:js' as js;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -506,22 +505,21 @@ class _HomePageState extends State<HomePage> {
     // Stop listening
     _stopMicrophoneListener();
 
-    // Hide install button when navigating to timer
-    if (kIsWeb) {
-      js.context.callMethod('toggleInstallButton', [false]);
-    }
-
     // Navigate to timer page and clear color when returning
     if (mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
-      ).then((_) {
-        if (mounted) {
-          setState(() {
-            _myColor = null;
+      Navigator.of(context)
+          .push(
+            MaterialPageRoute(
+              builder: (context) => TimerPage(myColor: _myColor),
+            ),
+          )
+          .then((_) {
+            if (mounted) {
+              setState(() {
+                _myColor = null;
+              });
+            }
           });
-        }
-      });
     }
   }
 
@@ -531,20 +529,17 @@ class _HomePageState extends State<HomePage> {
       _stopMicrophoneListener();
     }
 
-    // Hide install button when navigating to timer
-    if (kIsWeb) {
-      js.context.callMethod('toggleInstallButton', [false]);
-    }
-
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
-    ).then((_) {
-      if (mounted) {
-        setState(() {
-          _myColor = null;
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(builder: (context) => TimerPage(myColor: _myColor)),
+        )
+        .then((_) {
+          if (mounted) {
+            setState(() {
+              _myColor = null;
+            });
+          }
         });
-      }
-    });
   }
 
   @override
@@ -693,11 +688,6 @@ class _TimerPageState extends State<TimerPage> {
   }
 
   void _goHome() {
-    // Show install button when navigating back to home
-    if (kIsWeb) {
-      js.context.callMethod('toggleInstallButton', [true]);
-    }
-
     if (mounted) {
       Navigator.of(context).pop();
     }

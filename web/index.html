@@ -75,6 +75,15 @@
     window.toggleInstallButton = function(show) {
       document.getElementById('pwa-install-container').style.display = show ? 'block' : 'none';
     };
+
+    // Listen for messages from Flutter to control install button visibility
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.action === 'hideInstallButton') {
+        document.getElementById('pwa-install-container').style.display = 'none';
+      } else if (event.data && event.data.action === 'showInstallButton') {
+        document.getElementById('pwa-install-container').style.display = 'block';
+      }
+    });
   </script>
 
   <!--
