@@ -12,7 +12,7 @@ help:
 .PHONY: build-web
 build-web:
 	@echo "Building Flutter web..."
-	flutter build web --release
+	flutter build web --release --base-href=/rebuilt-timer/
 
 .PHONY: build-android
 build-android:
