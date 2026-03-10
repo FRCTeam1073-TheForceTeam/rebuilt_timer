@@ -642,10 +642,10 @@ class TimerPage extends StatefulWidget {
 }
 
 class _TimerPageState extends State<TimerPage> {
-  int _counter = 139;
+  int _counter = 0;
   late Timer _timer;
-  bool _isRunning = true;
   String? _autoWinner; // Track which team won auto: 'red' or 'blue'
+  late DateTime _matchEndTime;
 
   // Transition times in seconds: 2:10, 1:45, 1:20, 0:55, 0:30, 0:00
   final List<int> _transitionTimes = [130, 105, 80, 55, 30, 0];
@@ -666,21 +666,25 @@ class _TimerPageState extends State<TimerPage> {
 
   @override
   void dispose() {
-    if (_isRunning) {
+    if (_counter != 0) {
       _timer.cancel();
     }
     super.dispose();
   }
 
   void _startTimer() {
-    _isRunning = true;
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _matchEndTime = DateTime.now().add(const Duration(milliseconds: 139300));
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       setState(() {
-        _counter--;
+        final now = DateTime.now();
+        final millisecondsRemaining = _matchEndTime
+            .difference(now)
+            .inMilliseconds;
+        _counter = max(0, (millisecondsRemaining / 1000).ceil());
+
         if (_counter <= 0) {
           _counter = 0;
           _timer.cancel();
-          _isRunning = false;
           _goHome();
         }
       });
