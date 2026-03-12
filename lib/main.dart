@@ -941,6 +941,41 @@ class _TimerPageState extends State<TimerPage> {
     return Colors.grey.shade800;
   }
 
+  String _getTransitionLabel() {
+    // Find which transition we're currently in
+    int transitionIndex = -1;
+    for (int i = 0; i < _transitionTimes.length; i++) {
+      if (_counter > _transitionTimes[i]) {
+        transitionIndex = i;
+        break;
+      }
+    }
+
+    if (transitionIndex == -1 || transitionIndex >= _transitionActives.length) {
+      return 'Active hub: both';
+    }
+
+    final activeState = _transitionActives[transitionIndex];
+
+    if (activeState == 'both') {
+      return 'Active hub: both';
+    }
+
+    // If autoWinner is not set, show generic label
+    if (_autoWinner == null) {
+      return activeState == 'winner'
+          ? 'Active hub: auto winner'
+          : 'Active hub: auto loser';
+    }
+
+    // If autoWinner is set, show the actual color
+    if (activeState == 'winner') {
+      return _autoWinner == 'red' ? 'Active hub: red' : 'Active hub: blue';
+    } else {
+      return _autoWinner == 'red' ? 'Active hub: blue' : 'Active hub: red';
+    }
+  }
+
   bool _shouldHighlightPageBackground() {
     // Find which transition we're currently in
     int transitionIndex = -1;
@@ -1034,30 +1069,41 @@ class _TimerPageState extends State<TimerPage> {
 
     final rightColumn = Container(
       color: _getTransitionBackgroundColor(),
-      padding: EdgeInsets.all(MediaQuery.of(context).size.height * 0.1),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.height * 0.05),
       width: MediaQuery.of(context).size.shortestSide * 0.8,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('Transition', style: TextStyle(color: Colors.white)),
+          Text(
+            _getTransitionLabel(),
+            style: const TextStyle(color: Colors.white),
+          ),
           const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                '${_getSecondsUntilNextTransition()}',
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: MediaQuery.of(context).size.shortestSide * 0.5,
-                  fontWeight: FontWeight.bold,
-                  height: 0.8,
-                  color: Colors.white,
+          Builder(
+            builder: (context) {
+              final fontSize = MediaQuery.of(context).size.shortestSide * 0.4;
+              final boxHeight = fontSize * 1.2;
+              final boxWidth = fontSize * 1.8; // Wide enough for 2 digits
+              return SizedBox(
+                width: boxWidth,
+                height: boxHeight,
+                child: Center(
+                  child: Text(
+                    '${_getSecondsUntilNextTransition()}',
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.bold,
+                      height: 1.0,
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ],
       ),
