@@ -53,17 +53,23 @@ class _HomePageState extends State<HomePage> {
   AudioRecorder? _recorder;
   bool _isListeningToMic = false;
   String? _myColor; // Track team color: 'red' or 'blue'
-  final int _bellDetectionWindow = 1000; // 1 second window
 
   // State machine for bell pattern detection
-  // Expected pattern: matching → not-matching → matching → not-matching → matching
-  final List<bool> _expectedBellPattern = [true, false, true, false, true];
-  final List<bool> _currentBellPattern = [];
+  // Track count: 0, 1, 2, or 3 bells detected
+  int _bellCount = 0;
   final List<int> _bellPatternTimes =
       []; // timestamps of each pattern transition
-  bool _lastChunkWasMatch = false;
+  final List<int> _bellPeakTimes =
+      []; // timestamps of successful bell peak detections (for 0.4s spacing validation)
+  int? _bellDetectionStartTime; // timestamp when current bell detection started
+  bool _suppressingForBell =
+      false; // are we currently suppressing chunks for bell duration?
+  int?
+  _suppressionEndTime; // timestamp when suppression ends (for timeout detection)
+  int?
+  _lastValidBellStartTime; // timestamp when last valid bell was started (for spacing validation)
   final int _bellThreshold =
-      8000; // Amplitude threshold for bell detection (adjustable for debugging)
+      400; // Amplitude threshold for bell detection (lowered to catch all frequencies in top frequencies)
   StreamSubscription? _audioStream;
   String _status = '';
   Timer? _audioPollingTimer;
@@ -73,12 +79,35 @@ class _HomePageState extends State<HomePage> {
       false; // Track if we've skipped the 44-byte WAV header
 
   // FFT-based detection fields
-  // Default bell frequencies from calibration: 1016Hz, 2000Hz, 1492Hz
-  final List<double> _bellSpectrumPeaks = [1016.0, 2000.0, 1492.0];
+  // Bell frequencies from calibration (12 distinct peaks in bell spectrum)
+  final List<double> _bellSpectrumPeaks = [
+    7022.0,
+    6150.0,
+    5344.0,
+    4561.0,
+    3865.0,
+    3609.0,
+    3166.0,
+    2591.0,
+    2588.0,
+    2036.0,
+    1509.0,
+    1016.0,
+  ];
+  final int _topNFrequencies =
+      5; // Only 5 top frequencies - at least one bell frequency should be here
   final List<double> _noiseBaseline =
       []; // Recent noise levels for dynamic thresholding
   final int _noiseBaselineWindow =
       20; // Number of samples to average for noise floor
+  final double _bellFrequencyDetectionThreshold =
+      0.50; // Require ~50% of frequencies (6 out of 12)
+
+  int _maxTimestampProcessed = 0;
+
+  // Audio chunk buffering for out-of-order chunk handling
+  final List<_AudioChunkData> _chunkBuffer = [];
+  static const int _maxChunkBufferSize = 4;
 
   @override
   void initState() {
@@ -97,7 +126,7 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  double _calculateAudioCorrelation(Uint8List chunk) {
+  double _calculateAudioCorrelation(Uint8List chunk, int audioStreamMs) {
     // Compute FFT for the incoming chunk using hardcoded bell frequencies
     final chunkSpectrum = _computeFFT(chunk);
 
@@ -106,7 +135,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     // Calculate correlation between incoming audio and calibrated bell peak frequencies
-    return _calculateFrequencyCorrelation(chunkSpectrum);
+    return _calculateFrequencyCorrelation(chunkSpectrum, audioStreamMs);
   }
 
   /// Compute FFT spectrum from audio data
@@ -128,14 +157,15 @@ class _HomePageState extends State<HomePage> {
       // Use power-of-2 FFT size appropriate for sample count
       // For 20ms @ 16kHz = 320 samples, use 512
       // For 100ms @ 16kHz = 1600 samples, use 2048
+      // For 400ms @ 16kHz = 6400 samples, use 8192 (bell peal duration)
       int fftSize = 256;
-      while (fftSize < samples.length && fftSize < 2048) {
+      while (fftSize < samples.length && fftSize < 8192) {
         fftSize *= 2;
       }
 
-      // Don't exceed 2048 for performance
-      if (fftSize > 2048) {
-        fftSize = 2048;
+      // Use up to 8192 for better frequency resolution
+      if (fftSize > 8192) {
+        fftSize = 8192;
       }
 
       // Pad with zeros to reach fftSize
@@ -170,7 +200,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Calculate correlation between incoming audio and bell sample frequencies
-  double _calculateFrequencyCorrelation(List<double> incomingSpectrum) {
+  double _calculateFrequencyCorrelation(
+    List<double> incomingSpectrum,
+    int audioStreamMs,
+  ) {
     if (_bellSpectrumPeaks.isEmpty || incomingSpectrum.isEmpty) {
       return 0.0;
     }
@@ -178,24 +211,60 @@ class _HomePageState extends State<HomePage> {
     final sampleRate = 16000; // Hz
     final freqResolution = sampleRate / incomingSpectrum.length;
 
+    // Apply low-pass filter: zero out frequencies above 8000Hz to reduce noise
+    // Keeps all bell frequencies (up to 7022Hz) while filtering out high-frequency noise
+    final cutoffFreq = 8000.0; // Hz
+    final cutoffBin = (cutoffFreq / freqResolution).toInt();
+    final filteredSpectrum = List<double>.from(incomingSpectrum);
+    for (int i = cutoffBin; i < filteredSpectrum.length; i++) {
+      filteredSpectrum[i] = 0.0;
+    }
+
+    // Find the top N frequencies by magnitude (only in 1000-8000 Hz range to ignore low-freq rumble)
+    final double minFreq = 1000.0;
+    final double maxFreq = 8000.0;
+    final List<MapEntry<int, double>> frequencyMagnitudes = [];
+    for (int i = 0; i < filteredSpectrum.length; i++) {
+      final freq = i * freqResolution;
+      if (freq >= minFreq && freq <= maxFreq) {
+        frequencyMagnitudes.add(MapEntry(i, filteredSpectrum[i]));
+      }
+    }
+    frequencyMagnitudes.sort((a, b) => b.value.compareTo(a.value));
+    final topNBins = frequencyMagnitudes
+        .take(_topNFrequencies)
+        .map((e) => e.key)
+        .toSet();
+
     // Check how many bell peak frequencies are present in incoming audio
     int matchingPeaks = 0;
+    int bellPeaksInTopN = 0;
     final peakDetails = <String>[];
+    final requiredMatches =
+        ((_bellSpectrumPeaks.length * _bellFrequencyDetectionThreshold).ceil());
 
     for (final bellFreq in _bellSpectrumPeaks) {
       final binIndex = (bellFreq / freqResolution).toInt();
 
-      // Check a range around the expected frequency
-      final searchRange = 3; // bins
+      // Check a range around the expected frequency (±3% tolerance)
+      final frequencyTolerance = bellFreq * 0.03; // 3% variation allowed
+      final searchRangeBins = (frequencyTolerance / freqResolution)
+          .toInt()
+          .clamp(1, 5);
       double maxMagnitude = 0;
+      int maxBinInRange = binIndex;
 
       for (
-        int i = (binIndex - searchRange).clamp(0, incomingSpectrum.length - 1);
-        i <= (binIndex + searchRange).clamp(0, incomingSpectrum.length - 1);
+        int i = (binIndex - searchRangeBins).clamp(
+          0,
+          filteredSpectrum.length - 1,
+        );
+        i <= (binIndex + searchRangeBins).clamp(0, filteredSpectrum.length - 1);
         i++
       ) {
-        if (incomingSpectrum[i] > maxMagnitude) {
-          maxMagnitude = incomingSpectrum[i];
+        if (filteredSpectrum[i] > maxMagnitude) {
+          maxMagnitude = filteredSpectrum[i];
+          maxBinInRange = i;
         }
       }
 
@@ -203,29 +272,47 @@ class _HomePageState extends State<HomePage> {
       if (maxMagnitude > _bellThreshold) {
         // Magnitude threshold - bell peaks are 23000-36000, background noise is much lower
         matchingPeaks++;
-        peakDetails.add(
-          '✓ ${bellFreq.toStringAsFixed(0)}Hz: ${maxMagnitude.toStringAsFixed(0)}',
-        );
+
+        // Calculate actual frequency of the peak we found
+        final actualFreq = maxBinInRange * freqResolution;
+        final frequencyError = (actualFreq - bellFreq).abs();
+
+        // Also check if this peak is in the top N frequencies AND matches our target frequency closely
+        if (topNBins.contains(maxBinInRange) &&
+            frequencyError < (bellFreq * 0.03)) {
+          bellPeaksInTopN++;
+          peakDetails.add(
+            '✓ ${bellFreq.toStringAsFixed(0)}Hz: ${maxMagnitude.toStringAsFixed(0)}',
+          );
+        } else {
+          peakDetails.add(
+            '⚠ ${bellFreq.toStringAsFixed(0)}Hz: ${maxMagnitude.toStringAsFixed(0)}',
+          );
+        }
       } else {
         peakDetails.add(
-          '✗ ${bellFreq.toStringAsFixed(0)}Hz: ${maxMagnitude.toStringAsFixed(0)} (threshold: $_bellThreshold)',
+          '✗ ${bellFreq.toStringAsFixed(0)}Hz: ${maxMagnitude.toStringAsFixed(0)}',
         );
       }
     }
 
-    // Return correlation as ratio of matched peaks
-    final correlation = matchingPeaks / _bellSpectrumPeaks.length;
+    // Return correlation if:
+    // 1. At least one bell frequency is in the top 5 (1000-8000 Hz range)
+    // 2. At least 75% of frequencies meet the threshold
+    final minInTopN = 1;
+    final correlation =
+        (bellPeaksInTopN >= minInTopN && matchingPeaks >= requiredMatches)
+        ? 1.0
+        : 0.0;
+
     _debugLog(
-      '📊 Frequency correlation: ${correlation.toStringAsFixed(2)} ($matchingPeaks/${_bellSpectrumPeaks.length} peaks matched)',
+      '$audioStreamMs ${correlation == 1.0 ? '✅' : '❌'} ($matchingPeaks/$requiredMatches): ${peakDetails.join(' ')}',
     );
-    for (final detail in peakDetails) {
-      _debugLog('   $detail');
-    }
 
     // Add to noise baseline for dynamic thresholding
     _noiseBaseline.add(
-      incomingSpectrum.isNotEmpty
-          ? incomingSpectrum.reduce((a, b) => a + b)
+      filteredSpectrum.isNotEmpty
+          ? filteredSpectrum.reduce((a, b) => a + b)
           : 0,
     );
     if (_noiseBaseline.length > _noiseBaselineWindow) {
@@ -300,6 +387,13 @@ class _HomePageState extends State<HomePage> {
 
       _lastProcessedBytes = 0;
       _wavHeaderSkipped = false; // Reset header skip flag for new recording
+      _bellDetectionStartTime = null;
+      _suppressingForBell = false;
+      _suppressionEndTime = null;
+      _lastValidBellStartTime = null;
+      _bellCount = 0;
+      _bellPatternTimes.clear();
+      _bellPeakTimes.clear();
 
       if (!mounted) return;
       setState(() {
@@ -356,8 +450,8 @@ class _HomePageState extends State<HomePage> {
             }
 
             // Process in small chunks to avoid UI freeze
-            // 2048 samples * 2 bytes = 4096 byte chunks max
-            const int maxChunkSize = 4096;
+            // 240 samples * 2 bytes = 480 byte chunks max (30ms @ 16kHz)
+            const int maxChunkSize = 480;
             int processedThisRound = 0;
 
             while (processedThisRound < newBytes.length) {
@@ -368,22 +462,21 @@ class _HomePageState extends State<HomePage> {
               final chunk = Uint8List.fromList(
                 newBytes.sublist(processedThisRound, chunkEnd),
               );
+              final chunkSize = chunkEnd - processedThisRound;
+              final byteOffset = _lastProcessedBytes + processedThisRound;
+              final audioStreamMs = ((byteOffset - 44) / 32000 * 1000).toInt();
 
               if (chunk.isNotEmpty) {
-                try {
-                  _processAudioChunk(chunk);
-                } catch (e) {
-                  _debugLog('❌ Exception in _processAudioChunk: $e');
-                }
+                // Add to buffer instead of processing immediately
+                _chunkBuffer.add(
+                  _AudioChunkData(chunk, byteOffset, audioStreamMs),
+                );
               }
 
+              _lastProcessedBytes += chunkSize;
               processedThisRound = chunkEnd;
-
-              // If we have more data, update position but don't read again this cycle
-              if (processedThisRound < newBytes.length) {
-                _lastProcessedBytes += (chunkEnd - 0);
-              }
             }
+            _processBufferedChunks();
 
             _lastProcessedBytes = fileSize;
           } catch (e) {
@@ -423,6 +516,17 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
+    // Reset state for next listening session
+    _bellCount = 0;
+    _bellPatternTimes.clear();
+    _bellPeakTimes.clear();
+    _bellDetectionStartTime = null;
+    _suppressingForBell = false;
+    _suppressionEndTime = null;
+    _lastValidBellStartTime = null;
+    _chunkBuffer.clear();
+    _maxTimestampProcessed = 0;
+
     if (mounted) {
       setState(() {
         _isListeningToMic = false;
@@ -431,64 +535,144 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _processAudioChunk(Uint8List chunk) {
-    // Calculate how similar this chunk's frequency spectrum is to the calibrated bell peak frequencies
-    final correlation = _calculateAudioCorrelation(chunk);
+  void _processBufferedChunks() {
+    if (_chunkBuffer.isEmpty) {
+      _debugLog('⚠️ Buffer empty, nothing to process');
+      return;
+    }
 
-    // For FFT correlation, we need ALL bell peaks to match (100%)
-    // This is more robust than time-domain correlation
+    // Sort buffer by timestamp and process oldest first
+    _chunkBuffer.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    // Process chunks only when buffer exceeds max size
+    // This gives us a chance to reorder out-of-order chunks before committing
+    while (_chunkBuffer.length > _maxChunkBufferSize) {
+      try {
+        final chunkData = _chunkBuffer.removeAt(0);
+        _processAudioChunk(chunkData.chunk, chunkData.byteOffset);
+      } catch (e) {
+        _debugLog('❌ Exception in _processAudioChunk: $e');
+      }
+    }
+  }
+
+  void _processAudioChunk(Uint8List chunk, int byteOffset) {
+    final audioStreamMs = ((byteOffset - 44) / 32000 * 1000).toInt();
+    final now = audioStreamMs;
+
+    // Skip out-of-order chunks
+    if (now < _maxTimestampProcessed) {
+      _debugLog(
+        '⚠️  Ignoring out-of-order chunk: $now < $_maxTimestampProcessed',
+      );
+      return;
+    }
+    _maxTimestampProcessed = now;
+
+    // If we're suppressing after detecting a bell start, check if bell is finished
+    if (_suppressingForBell) {
+      if (_bellDetectionStartTime != null &&
+          now - _bellDetectionStartTime! >= 399) {
+        _suppressingForBell =
+            false; // Done suppressing, back to normal processing
+        _suppressionEndTime = now; // Mark when suppression ended
+      } else {
+        _debugLog('$now ➖ skipped');
+        return; // Still in suppression window, skip this chunk (and correlation calculation)
+      }
+    }
+
+    // Check if we've exceeded 300ms without detecting a bell end - reset if timeout
+    if (_suppressionEndTime != null && now - _suppressionEndTime! > 300) {
+      _debugLog(
+        '❌ Timeout: no bell end detected within 300ms, resetting to initial state',
+      );
+      _bellDetectionStartTime = null;
+      _suppressionEndTime = null;
+      _bellCount = 0;
+      _bellPatternTimes.clear();
+      _lastValidBellStartTime = null;
+    }
+
+    // Now calculate correlation only if we're not suppressing
+    final correlation = _calculateAudioCorrelation(chunk, now);
+
+    // For FFT correlation, we need 75%+ of frequencies to match
     final fftCorrelationThreshold = 1.0;
     final isMatch = correlation >= fftCorrelationThreshold;
-    final now = DateTime.now().millisecondsSinceEpoch;
 
-    // State machine: track pattern changes (match to non-match and vice versa)
-    if (isMatch != _lastChunkWasMatch) {
-      // State changed - record this transition
-      _currentBellPattern.add(isMatch);
-      _bellPatternTimes.add(now);
-      _lastChunkWasMatch = isMatch;
-      _debugLog(
-        '   📊 Pattern transition: ${isMatch ? '✓' : '✗'} (pattern length: ${_currentBellPattern.length})',
-      );
+    // Track positive detections for statistics
+    if (isMatch) {
+      _bellPeakTimes.add(now);
+      // Keep only recent detections (within last 2 seconds)
+      if (_bellPeakTimes.isNotEmpty && now - _bellPeakTimes.first > 2000) {
+        _bellPeakTimes.removeAt(0);
+      }
+    }
 
-      if (mounted) {
-        setState(() {
-          _status =
-              'Pattern: ${_currentBellPattern.map((m) => m ? '✓' : '✗').join(' ')} (need: ✓ ✗ ✓ ✗ ✓)';
-        });
+    // Detect bell start: positive correlation when not currently detecting a bell
+    if (isMatch && _bellDetectionStartTime == null) {
+      final bellNumber = _bellCount + 1;
+
+      // Check timing with previous bell (for bells after the first one)
+      bool timingOk = false;
+      if (_lastValidBellStartTime == null) {
+        timingOk = true; // First bell, always valid
+        _debugLog('🔔 Bell $bellNumber detected');
+      } else {
+        final timeSinceLast = now - _lastValidBellStartTime!;
+        const expectedMs = 400; // 0.4 seconds
+        const toleranceMs = 100; // ±100ms
+        timingOk =
+            (timeSinceLast >= expectedMs - toleranceMs) &&
+            (timeSinceLast <= expectedMs + toleranceMs);
+        _debugLog(
+          '🔔 Bell $bellNumber detected - spacing: ${timeSinceLast}ms (expected ${expectedMs}±${toleranceMs}ms) - ${timingOk ? '✅' : '❌'}',
+        );
       }
 
-      // Check if pattern is outside the 1-second window
-      if (_bellPatternTimes.isNotEmpty &&
-          now - _bellPatternTimes.first > _bellDetectionWindow) {
-        _currentBellPattern.clear();
-        _bellPatternTimes.clear();
-        _lastChunkWasMatch = isMatch;
-        _currentBellPattern.add(isMatch);
-        _bellPatternTimes.add(now);
-      }
+      if (timingOk) {
+        // Valid bell start detected, increment count and start suppression
+        _bellCount++;
+        _lastValidBellStartTime = now; // Record this valid bell's start time
+        _bellDetectionStartTime = now;
+        _suppressingForBell = true;
+        _suppressionEndTime = null; // Clear any previous timeout tracker
 
-      // Check if we've matched the expected pattern (at exactly 5 transitions or if we have at least 5)
-      if (_currentBellPattern.length >= _expectedBellPattern.length) {
-        // Check if the last 5 transitions match the expected pattern
-        bool patternMatches = true;
-        for (int i = 0; i < _expectedBellPattern.length; i++) {
-          int checkIndex =
-              _currentBellPattern.length - _expectedBellPattern.length + i;
-          if (_currentBellPattern[checkIndex] != _expectedBellPattern[i]) {
-            patternMatches = false;
-            break;
-          }
+        if (mounted) {
+          setState(() {
+            _status = 'Bells detected: $_bellCount/3';
+          });
         }
 
-        if (patternMatches) {
+        // Check if we've detected 3 bells
+        if (_bellCount == 3) {
           _onThreeBellsDetected();
-          _currentBellPattern.clear();
+          _bellCount = 0;
           _bellPatternTimes.clear();
-          _lastChunkWasMatch = false;
+          _bellPeakTimes.clear();
+          _lastValidBellStartTime = null;
+          _bellDetectionStartTime = null;
+          _suppressionEndTime = null;
           return; // Exit early to avoid further processing
         }
+      } else {
+        // Timing not valid, reset to initial state
+        _debugLog('❌ Bell timing not correct');
+        _bellCount = 0;
+        _bellPatternTimes.clear();
+        _lastValidBellStartTime = null;
+        _suppressionEndTime = null;
+        return; // Don't start suppression if timing is invalid
       }
+
+      return; // Suppress further processing while bell ringing
+    }
+
+    // Detect bell end: negative correlation after suppression has ended
+    if (!isMatch && _bellDetectionStartTime != null && !_suppressingForBell) {
+      // Just mark that the bell has ended, reset detection
+      _bellDetectionStartTime = null;
     }
   }
 
@@ -631,6 +815,14 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+class _AudioChunkData {
+  final Uint8List chunk;
+  final int byteOffset;
+  final int timestamp;
+
+  _AudioChunkData(this.chunk, this.byteOffset, this.timestamp);
 }
 
 class TimerPage extends StatefulWidget {
